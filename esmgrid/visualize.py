@@ -1,10 +1,12 @@
-from abc import ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
 import functools
 
 import numpy as np
 import shapely.geometry as shp
 import shapely.ops
 import pyproj
+
+import xarray as xr
 
 import matplotlib.pyplot as plt
 import descartes
@@ -13,10 +15,57 @@ import cartopy.crs as ccrs
 import ESMF
 
 
-class GridBase:
+class GridBase(ABC):
     @property
     def crs(self):
         pass
+
+    def project_to(self, x, y, crs: pyproj.Proj):
+        project = functools.partial(
+            pyproj.transform,
+            pyproj.Proj(**self.crs),    # src crs
+            crs                         # dst crs
+        )
+
+    def get_xy_centers(self, crs: pyproj.Proj):
+        x = self.x_centers
+        y = self.y_centers
+        src = pyproj.Proj(**self.crs)
+        dst = crs
+        x, y = pyproj.transform(src, dst, x, y)
+        return x, y
+
+    def get_xy_corners(self, crs: pyproj.Proj):
+        x = self.x_corners
+        y = self.y_corners
+        src = pyproj.Proj(**self.crs)
+        dst = crs
+        x, y = pyproj.transform(src, dst, x, y)
+        return x, y
+
+    def get_xy_boxes(self, crs: pyproj.Proj):
+        xy = np.array(self.get_xy_corners(crs))
+        xy = np.moveaxis(xy, 0, 2)
+        bl = xy[:-1, :-1, :]
+        br = xy[1:, :-1, :]
+        ul = xy[:-1, 1:, :]
+        ur = xy[1:, 1:, :]
+        xy_boxes = np.array([bl, ul, ur, br])
+        xy_boxes = np.moveaxis(xy_boxes, 0, 2)
+        return xy_boxes[..., 0], xy_boxes[..., 1]
+
+    @staticmethod
+    def xy_to_polygon(x, y):
+        xy = np.array([x, y])
+        xy = np.moveaxis(xy, 0, -1)
+        p = np.empty(xy.shape[:2], dtype=object)
+        for i, y_slice in enumerate(xy):
+            p[i, :] = [shp.Polygon(poly) for poly in y_slice]
+        return p
+
+    @property
+    def shape(self) -> np.ndarray:
+        return np.array(self.x_centers.shape)
 
     @property
     @abstractmethod
@@ -127,6 +176,37 @@ class GridBase:
         patch = descartes.PolygonPatch(mp, facecolor=facecolor, edgecolor=edgecolor, **kwargs)
         ax.add_patch(patch)
 
+    def to_SCRIP(self, filename: str):
+        boxes = self.grid_boxes().flatten(order='F')
+
+        x, y = self.get_xy_corners(pyproj.Proj(**self.crs))
+        dx = np.diff(x, axis=0)[:, :-1]
+        dy = np.diff(y, axis=1)[:-1, :]
+        area = dx*dy * (np.pi/180)**2
+
+        make_ccw = lambda polygon: np.array(shp.polygon.orient(polygon, 1).exterior)
+        boxes_ccw = np.array([make_ccw(polygon) for polygon in boxes])
+        boxes_ccw = boxes_ccw[:, :-1, :] # remove last point from boxes (which is copy of the first point)
+        boxes_ccw = np.moveaxis(boxes_ccw, -1, 0) # bring xy dim to front
+
+        ds = xr.Dataset(
+            data_vars={
+                'grid_dims': ('grid_rank', self.shape.astype(np.int32)),
+                'grid_center_lat': ('grid_size', self.y_centers.flatten(order='F')),
+                'grid_center_lon': ('grid_size', self.x_centers.flatten(order='F')),
+                'grid_corner_lat': (('grid_size', 'grid_corners'), boxes_ccw[1, ...]),
+                'grid_corner_lon': (('grid_size', 'grid_corners'), boxes_ccw[0, ...]),
+                'grid_imask': ('grid_size', np.ones_like(self.x_centers.flatten()).astype(np.int32)),
+                'grid_area' : ('grid_size', area.flatten())
+            }
+        )
+        for varname in ['grid_center_lat', 'grid_center_lon', 'grid_corner_lat', 'grid_corner_lon']:
+            ds[varname].attrs['units'] = 'degrees'
+        for varname in ['grid_corner_lat', 'grid_corner_lon']:
+            ds[varname].attrs['_FillValue'] = -9999.0
+        ds['grid_area'].attrs.update({'units': 'radians^2', 'long_name': 'area weights'})
+        ds.to_netcdf(filename)
+
 
 class GridESMFBase(GridBase):
     _xdim=0
@@ -185,11 +265,13 @@ class GridESMFFromMemory(GridESMFBase):
         y_corners[...] = y2d
 
 class GridESMFFromFile(GridESMFBase):
-    def __init__(self, filename: str, filetype: ESMF.FileFormat, add_corner_stagger=True):
+    def __init__(self, filename: str, filetype: ESMF.FileFormat, add_corner_stagger=True, is_sphere=False, **kwargs):
         self._grid = ESMF.Grid(
             filename=filename,
             filetype=filetype,
-            add_corner_stagger=add_corner_stagger
+            add_corner_stagger=add_corner_stagger,
+            is_sphere=is_sphere,  # so that x_corners is Nx+1 (i.e. we don't want the longitude grid to wrap)
+            **kwargs
         )
 
     @property
@@ -207,9 +289,10 @@ if __name__ == '__main__':
 
     #grid = GridESMF(len(lon), len(lat), ESMF.CoordSys.SPH_DEG)
     grid = GridESMFFromFile(
-        filename='/home/liam/Downloads/ESMPy_630r_01b/esmf/src/Infrastructure/Grid/examples/data/T42_grid.nc',
-        filetype=ESMF.FileFormat.SCRIP
+        filename='foo2.nc', #'/home/liam/Downloads/ESMPy_630r_01b/esmf/src/Infrastructure/Grid/examples/data/T42_grid.nc',
+        filetype=ESMF.FileFormat.SCRIP,
     )
+    #grid.to_SCRIP('foo2.nc')
     #grid.load_center_xy(lon, lat)
     #grid.load_corner_xy(lon_edge, lat_edge)
 
@@ -219,6 +302,6 @@ if __name__ == '__main__':
     ax.set_global()
     ax.coastlines()
     grid.plot_lines(ax, pyproj.Proj(crs.proj4_init))
-    #grid.plot_centers(ax, pyproj.Proj(crs.proj4_init))
-    #grid.plot_corners(ax, pyproj.Proj(crs.proj4_init))
+    grid.plot_centers(ax, pyproj.Proj(crs.proj4_init))
+    grid.plot_corners(ax, pyproj.Proj(crs.proj4_init))
     plt.show()
