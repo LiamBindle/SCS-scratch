@@ -264,6 +264,14 @@ class GridESMFFromMemory(GridESMFBase):
         x_corners[...] = x2d
         y_corners[...] = y2d
 
+class GridESMFCS(GridESMFBase):
+    def __init__(self):
+        self._grid = ESMF.Grid(tilesize=10, add_corner_stagger=True)
+
+    @property
+    def crs(self):
+        return {'init': 'epsg:4326', 'pm': -360}
+
 class GridESMFFromFile(GridESMFBase):
     def __init__(self, filename: str, filetype: ESMF.FileFormat, add_corner_stagger=True, is_sphere=False, **kwargs):
         self._grid = ESMF.Grid(
@@ -288,10 +296,11 @@ if __name__ == '__main__':
     lon_edge = np.append(lon_edge, lon[-1] + np.diff(lon)[0]/2)
 
     #grid = GridESMF(len(lon), len(lat), ESMF.CoordSys.SPH_DEG)
-    grid = GridESMFFromFile(
+    """grid = GridESMFFromFile(
         filename='foo2.nc', #'/home/liam/Downloads/ESMPy_630r_01b/esmf/src/Infrastructure/Grid/examples/data/T42_grid.nc',
         filetype=ESMF.FileFormat.SCRIP,
-    )
+    )"""
+    grid = GridESMFCS()
     #grid.to_SCRIP('foo2.nc')
     #grid.load_center_xy(lon, lat)
     #grid.load_corner_xy(lon_edge, lat_edge)
@@ -303,5 +312,5 @@ if __name__ == '__main__':
     ax.coastlines()
     grid.plot_lines(ax, pyproj.Proj(crs.proj4_init))
     grid.plot_centers(ax, pyproj.Proj(crs.proj4_init))
-    grid.plot_corners(ax, pyproj.Proj(crs.proj4_init))
+    #grid.plot_corners(ax, pyproj.Proj(crs.proj4_init))
     plt.show()
