@@ -246,7 +246,10 @@ class GridESMFFromMemory(GridESMFBase):
         )
 
     def load_center_xy(self, x, y):
-        x2d, y2d = np.meshgrid(x, y, indexing='ij')
+        if len(x.shape) == 1:
+            x2d, y2d = np.meshgrid(x, y, indexing='ij')
+        else:
+            x2d, y2d = x, y
         x2d = np.asfortranarray(x2d)
         y2d = np.asfortranarray(y2d)
         x_centers = self._grid.get_coords(coord_dim=self._xdim, staggerloc=ESMF.StaggerLoc.CENTER)
@@ -256,7 +259,10 @@ class GridESMFFromMemory(GridESMFBase):
 
     def load_corner_xy(self, x, y):
         self._grid.add_coords(staggerloc=ESMF.StaggerLoc.CORNER)
-        x2d, y2d = np.meshgrid(x, y, indexing='ij')
+        if len(x.shape) == 1:
+            x2d, y2d = np.meshgrid(x, y, indexing='ij')
+        else:
+            x2d, y2d = x, y
         x2d = np.asfortranarray(x2d)
         y2d = np.asfortranarray(y2d)
         x_corners = self._grid.get_coords(coord_dim=self._xdim, staggerloc=ESMF.StaggerLoc.CORNER)

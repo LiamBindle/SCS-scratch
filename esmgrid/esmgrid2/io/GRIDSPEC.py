@@ -1,6 +1,7 @@
 import os.path
 import re
 import pyproj
+import numpy as np
 import xarray as xr
 from esmgrid2.base import LRGTileBase, TileBase, TileMosaic
 
@@ -15,6 +16,19 @@ class GRIDSPEC:
         tile.ye = ds.y[0::2, 0::2].values
         tile.crs = crs
         return {ds.tile.astype(str).item(): tile}
+
+    @staticmethod
+    def write_tile(tile: TileBase) -> xr.Dataset:
+        super_x = np.zeros(tile.shape)
+        super_y = np.zeros(tile.shape)
+        super_x[1::2, 1::2] = tile.xc
+        super_x[0::2, 0::2] = tile.xe
+        super_y[1::2, 1::2] = tile.xc
+        super_y[0::2, 0::2] = tile.xe
+        ds = xr.Dataset({
+            'x': ('nx, ny', super_x),
+            'y': ('nx, ny', super_y)
+        })
 
     @staticmethod
     def read_contacts(ds: xr.Dataset):
@@ -39,10 +53,6 @@ class GRIDSPEC:
             x2 = parse_slice(slice_search.group(4))
             contacts.append({c1: (x1, y1), c2: (x2, y2)})
         return contacts
-
-    @staticmethod
-    def write_tile(tile: TileBase) -> xr.Dataset:
-        pass
 
     @staticmethod
     def read_mosaic(path: str) -> TileMosaic:
